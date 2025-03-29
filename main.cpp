@@ -1,5 +1,4 @@
 #include "server.hpp"
-#include <iostream>
 
 int main() {
     Server server(8080);

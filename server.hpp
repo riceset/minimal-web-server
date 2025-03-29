@@ -2,6 +2,17 @@
 #define SERVER_HPP
 
 #include <string>
+#include <iostream>
+#include <cstring>
+#include <cerrno>
+#include <cstdlib>
+#include <sstream>
+#include <unistd.h>
+#include <sys/wait.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <fcntl.h>
 
 class Server {
 public:

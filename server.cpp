@@ -1,15 +1,4 @@
 #include "server.hpp"
-#include <iostream>
-#include <cstring>
-#include <cerrno>
-#include <cstdlib>
-#include <sstream>
-#include <unistd.h>
-#include <sys/wait.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <fcntl.h>
 
 template<typename T>
 std::string toString(T value) {
@@ -211,18 +200,30 @@ std::string Server::executePhpScript(const std::string& scriptPath,
         dup2(pipefd[1], STDOUT_FILENO);
         close(pipefd[1]);
         
-        // Set environment variables for CGI
-        setenv("REQUEST_METHOD", "GET", 1);
-        setenv("QUERY_STRING", queryString.c_str(), 1);
-        setenv("SCRIPT_NAME", scriptPath.c_str(), 1);
+        // Prepare environment variables
+        std::string envMethod = std::string("REQUEST_METHOD=") + (postData.empty() ? "GET" : "POST");
+        std::string envQuery = std::string("QUERY_STRING=") + queryString;
+        std::string envScript = std::string("SCRIPT_NAME=") + scriptPath;
+        std::string envLength = std::string("CONTENT_LENGTH=") + (postData.empty() ? "0" : toString(postData.length()));
         
-        if (!postData.empty()) {
-            setenv("REQUEST_METHOD", "POST", 1);
-            setenv("CONTENT_LENGTH", toString(postData.length()).c_str(), 1);
-        }
+        // Create environment array
+        char* env[] = {
+            const_cast<char*>(envMethod.c_str()),
+            const_cast<char*>(envQuery.c_str()),
+            const_cast<char*>(envScript.c_str()),
+            const_cast<char*>(envLength.c_str()),
+            NULL
+        };
+        
+        // Prepare arguments for execve
+        char* args[] = {
+            const_cast<char*>("/usr/local/bin/php"),
+            const_cast<char*>(scriptPath.c_str()),
+            NULL
+        };
         
         std::cout << "Executing PHP with command: /usr/local/bin/php " << scriptPath << std::endl;
-        execl("/usr/local/bin/php", "php", scriptPath.c_str(), NULL);
+        execve("/usr/local/bin/php", args, env);
         std::cerr << "Error executing PHP: " << strerror(errno) << std::endl;
         std::exit(1);
     } else {  // Parent process
