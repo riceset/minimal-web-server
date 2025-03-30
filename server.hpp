@@ -32,7 +32,8 @@ private:
     // Request handling
     std::string readHttpRequest(int clientSocket);
     bool parseRequest(const std::string& request, std::string& method, 
-                     std::string& path, std::string& queryString);
+                     std::string& path, std::string& queryString,
+                     std::string& postData);
     
     // Response handling
     void sendHttpResponse(int clientSocket, const std::string& content);

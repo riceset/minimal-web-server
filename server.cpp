@@ -1,4 +1,6 @@
 #include "server.hpp"
+#include <string>
+#include <sstream>
 
 template<typename T>
 std::string toString(T value) {
@@ -78,9 +80,9 @@ void Server::run() {
         
         // Handle the request
         std::string request = readHttpRequest(clientSocket);
-        std::string method, path, queryString;
+        std::string method, path, queryString, postData;
         
-        if (!parseRequest(request, method, path, queryString)) {
+        if (!parseRequest(request, method, path, queryString, postData)) {
             std::cerr << "Error parsing request" << std::endl;
             close(clientSocket);
             continue;
@@ -90,7 +92,7 @@ void Server::run() {
         if (path.find(".php") != std::string::npos) {
             std::string scriptPath = "." + path;
             std::cout << "Processing PHP script: " << scriptPath << std::endl;
-            std::string output = executePhpScript(scriptPath, queryString, "");
+            std::string output = executePhpScript(scriptPath, queryString, postData);
             sendHttpResponse(clientSocket, output);
         } else {
             sendHttpResponse(clientSocket, "Only PHP scripts are supported");
@@ -122,7 +124,8 @@ std::string Server::readHttpRequest(int clientSocket) {
 }
 
 bool Server::parseRequest(const std::string& request, std::string& method, 
-                         std::string& path, std::string& queryString) {
+                         std::string& path, std::string& queryString,
+                         std::string& postData) {
     std::cout << "Parsing request..." << std::endl;
     
     size_t firstLineEnd = request.find("\r\n");
@@ -164,6 +167,28 @@ bool Server::parseRequest(const std::string& request, std::string& method,
     std::cout << "Path: " << path << std::endl;
     std::cout << "Query string: " << queryString << std::endl;
     
+    // Parse POST data if present
+    if (method == "POST") {
+        size_t contentLengthStart = request.find("Content-Length: ");
+        if (contentLengthStart != std::string::npos) {
+            contentLengthStart += 16; // Length of "Content-Length: "
+            size_t contentLengthEnd = request.find("\r\n", contentLengthStart);
+            if (contentLengthEnd != std::string::npos) {
+                std::string contentLengthStr = request.substr(contentLengthStart, contentLengthEnd - contentLengthStart);
+                std::istringstream iss(contentLengthStr);
+                int contentLength;
+                iss >> contentLength;
+                
+                size_t bodyStart = request.find("\r\n\r\n");
+                if (bodyStart != std::string::npos) {
+                    bodyStart += 4;
+                    postData = request.substr(bodyStart, contentLength);
+                    std::cout << "POST data: " << postData << std::endl;
+                }
+            }
+        }
+    }
+    
     return true;
 }
 
@@ -200,11 +225,29 @@ std::string Server::executePhpScript(const std::string& scriptPath,
         dup2(pipefd[1], STDOUT_FILENO);
         close(pipefd[1]);
         
+        // Set up stdin for POST data if present
+        if (!postData.empty()) {
+            int stdinPipe[2];
+            if (pipe(stdinPipe) == -1) {
+                std::cerr << "Error creating stdin pipe" << std::endl;
+                std::exit(1);
+            }
+            
+            // Write POST data to pipe before execve
+            write(stdinPipe[1], postData.c_str(), postData.length());
+            close(stdinPipe[1]);
+            
+            // Redirect pipe to stdin
+            dup2(stdinPipe[0], STDIN_FILENO);
+            close(stdinPipe[0]);
+        }
+        
         // Prepare environment variables
         std::string envMethod = std::string("REQUEST_METHOD=") + (postData.empty() ? "GET" : "POST");
         std::string envQuery = std::string("QUERY_STRING=") + queryString;
         std::string envScript = std::string("SCRIPT_NAME=") + scriptPath;
         std::string envLength = std::string("CONTENT_LENGTH=") + (postData.empty() ? "0" : toString(postData.length()));
+        std::string envType = "CONTENT_TYPE=application/x-www-form-urlencoded";
         
         // Create environment array
         char* env[] = {
@@ -212,6 +255,7 @@ std::string Server::executePhpScript(const std::string& scriptPath,
             const_cast<char*>(envQuery.c_str()),
             const_cast<char*>(envScript.c_str()),
             const_cast<char*>(envLength.c_str()),
+            const_cast<char*>(envType.c_str()),
             NULL
         };
         
@@ -223,6 +267,7 @@ std::string Server::executePhpScript(const std::string& scriptPath,
         };
         
         std::cout << "Executing PHP with command: /usr/local/bin/php " << scriptPath << std::endl;
+        std::cout << "POST data being sent: " << postData << std::endl;
         execve("/usr/local/bin/php", args, env);
         std::cerr << "Error executing PHP: " << strerror(errno) << std::endl;
         std::exit(1);
