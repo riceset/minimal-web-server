@@ -225,29 +225,13 @@ std::string Server::executePhpScript(const std::string& scriptPath,
         dup2(pipefd[1], STDOUT_FILENO);
         close(pipefd[1]);
         
-        // Set up stdin for POST data if present
-        if (!postData.empty()) {
-            int stdinPipe[2];
-            if (pipe(stdinPipe) == -1) {
-                std::cerr << "Error creating stdin pipe" << std::endl;
-                std::exit(1);
-            }
-            
-            // Write POST data to pipe before execve
-            write(stdinPipe[1], postData.c_str(), postData.length());
-            close(stdinPipe[1]);
-            
-            // Redirect pipe to stdin
-            dup2(stdinPipe[0], STDIN_FILENO);
-            close(stdinPipe[0]);
-        }
-        
         // Prepare environment variables
         std::string envMethod = std::string("REQUEST_METHOD=") + (postData.empty() ? "GET" : "POST");
         std::string envQuery = std::string("QUERY_STRING=") + queryString;
         std::string envScript = std::string("SCRIPT_NAME=") + scriptPath;
         std::string envLength = std::string("CONTENT_LENGTH=") + (postData.empty() ? "0" : toString(postData.length()));
         std::string envType = "CONTENT_TYPE=application/x-www-form-urlencoded";
+        std::string envPostData = std::string("HTTP_RAW_POST_DATA=") + postData;
         
         // Create environment array
         char* env[] = {
@@ -256,6 +240,7 @@ std::string Server::executePhpScript(const std::string& scriptPath,
             const_cast<char*>(envScript.c_str()),
             const_cast<char*>(envLength.c_str()),
             const_cast<char*>(envType.c_str()),
+            const_cast<char*>(envPostData.c_str()),
             NULL
         };
         
@@ -267,7 +252,7 @@ std::string Server::executePhpScript(const std::string& scriptPath,
         };
         
         std::cout << "Executing PHP with command: /usr/local/bin/php " << scriptPath << std::endl;
-        std::cout << "POST data being sent: " << postData << std::endl;
+        std::cout << "POST data being sent via env: " << postData << std::endl;
         execve("/usr/local/bin/php", args, env);
         std::cerr << "Error executing PHP: " << strerror(errno) << std::endl;
         std::exit(1);
