@@ -14,6 +14,7 @@
 #include <arpa/inet.h>
 #include <fcntl.h>
 
+
 class Server {
 public:
     Server(int port = 8080);
@@ -38,11 +39,9 @@ private:
     // Response handling
     void sendHttpResponse(int clientSocket, const std::string& content);
     
-    // CGI operations
-    std::string executePhpScript(const std::string& scriptPath, 
-                                const std::string& queryString,
-                                const std::string& postData);
-    
+    // Forward declaration of free function
+    std::string executePhpScript(const std::string& scriptPath, const std::string& body, const std::string& queryString, bool isPost);
+
     // Member variables
     int serverSocket;
     int port;

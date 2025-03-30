@@ -92,7 +92,8 @@ void Server::run() {
         if (path.find(".php") != std::string::npos) {
             std::string scriptPath = "." + path;
             std::cout << "Processing PHP script: " << scriptPath << std::endl;
-            std::string output = executePhpScript(scriptPath, queryString, postData);
+            bool isPost = (method == "POST");
+            std::string output = executePhpScript(scriptPath, postData, queryString, isPost);
             sendHttpResponse(clientSocket, output);
         } else {
             sendHttpResponse(clientSocket, "Only PHP scripts are supported");
@@ -203,75 +204,74 @@ void Server::sendHttpResponse(int clientSocket, const std::string& content) {
     std::cout << "Wrote " << bytesWritten << " bytes to client" << std::endl;
 }
 
-std::string Server::executePhpScript(const std::string& scriptPath, 
-                                   const std::string& queryString,
-                                   const std::string& postData) {
-    std::cout << "Executing PHP script: " << scriptPath << std::endl;
-    
+std::string Server::executePhpScript(const std::string& scriptPath, const std::string& body, const std::string& queryString, bool isPost) {
     int pipefd[2];
-    if (pipe(pipefd) == -1) {
-        std::cerr << "Error creating pipe" << std::endl;
+    int stdinPipe[2];
+
+    if (pipe(pipefd) == -1 || (isPost && pipe(stdinPipe) == -1)) {
+        std::cerr << "Error creating pipe: " << strerror(errno) << std::endl;
         return "Error creating pipe";
     }
-    
+
     pid_t pid = fork();
     if (pid == -1) {
-        std::cerr << "Error forking process" << std::endl;
-        return "Error forking process";
+        std::cerr << "Error forking: " << strerror(errno) << std::endl;
+        return "Error forking";
     }
-    
-    if (pid == 0) {  // Child process
+
+    if (pid == 0) { // Child process
         close(pipefd[0]);
         dup2(pipefd[1], STDOUT_FILENO);
         close(pipefd[1]);
-        
-        // Prepare environment variables
-        std::string envMethod = std::string("REQUEST_METHOD=") + (postData.empty() ? "GET" : "POST");
-        std::string envQuery = std::string("QUERY_STRING=") + queryString;
-        std::string envScript = std::string("SCRIPT_NAME=") + scriptPath;
-        std::string envLength = std::string("CONTENT_LENGTH=") + (postData.empty() ? "0" : toString(postData.length()));
-        std::string envType = "CONTENT_TYPE=application/x-www-form-urlencoded";
-        std::string envPostData = std::string("HTTP_RAW_POST_DATA=") + postData;
-        
-        // Create environment array
+
+        if (isPost) {
+            close(stdinPipe[1]);
+            dup2(stdinPipe[0], STDIN_FILENO);
+            close(stdinPipe[0]);
+        }
+
+        std::string envMethod = "REQUEST_METHOD=" + std::string(isPost ? "POST" : "GET");
+        std::string envLength = "CONTENT_LENGTH=" + toString(isPost ? body.length() + 1 : 0);
+        std::string envType = "CONTENT_TYPE=" + std::string(isPost ? "application/x-www-form-urlencoded" : "none");
+        std::string envScript = "SCRIPT_NAME=" + scriptPath;
+        std::string envQuery = "QUERY_STRING=" + queryString;
+
         char* env[] = {
             const_cast<char*>(envMethod.c_str()),
-            const_cast<char*>(envQuery.c_str()),
-            const_cast<char*>(envScript.c_str()),
             const_cast<char*>(envLength.c_str()),
             const_cast<char*>(envType.c_str()),
-            const_cast<char*>(envPostData.c_str()),
+            const_cast<char*>(envScript.c_str()),
+            const_cast<char*>(envQuery.c_str()),
             NULL
         };
-        
-        // Prepare arguments for execve
+
         char* args[] = {
             const_cast<char*>("/usr/local/bin/php"),
             const_cast<char*>(scriptPath.c_str()),
             NULL
         };
-        
-        std::cout << "Executing PHP with command: /usr/local/bin/php " << scriptPath << std::endl;
-        std::cout << "POST data being sent via env: " << postData << std::endl;
+
         execve("/usr/local/bin/php", args, env);
         std::cerr << "Error executing PHP: " << strerror(errno) << std::endl;
         std::exit(1);
-    } else {  // Parent process
+    } else { // Parent process
         close(pipefd[1]);
-        
-        char buffer[MAX_BUFFER_SIZE];
+        if (isPost) {
+            close(stdinPipe[0]);
+            std::string bodyWithNewline = body + "\n"; // Add newline for fgets
+            write(stdinPipe[1], bodyWithNewline.c_str(), bodyWithNewline.length());
+            close(stdinPipe[1]);
+        }
+
         std::string output;
-        int bytesRead;
-        
+        char buffer[1024];
+        ssize_t bytesRead;
         while ((bytesRead = read(pipefd[0], buffer, sizeof(buffer) - 1)) > 0) {
             buffer[bytesRead] = '\0';
             output += buffer;
-            std::cout << "Read " << bytesRead << " bytes from PHP output" << std::endl;
         }
-        
         close(pipefd[0]);
         waitpid(pid, NULL, 0);
-        
         return output;
     }
-} 
+}
